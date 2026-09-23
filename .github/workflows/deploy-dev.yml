@@ -22,6 +22,17 @@ jobs:
         run: |
           docker compose up -d --build
 
+      - name: Pull Models (Wait for Ollama)
+        run: |
+          # Wait a moment for Ollama to be ready
+          sleep 10
+          docker compose exec -T ollama ollama pull qwen2.5-coder:14b
+          docker compose exec -T ollama ollama pull nomic-embed-text
+
+      - name: Seed Knowledge Base
+        run: |
+          docker compose exec -T control-plane python -m app.rag.seed_kb
+
       - name: Check services
         run: |
           docker compose ps
