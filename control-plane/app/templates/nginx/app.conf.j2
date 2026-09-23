@@ -1,0 +1,128 @@
+{#- ViljaOps generated vhost. Do not edit on the server: regenerate instead. -#}
+# ---------------------------------------------------------------------------
+# Managed by ViljaOps — generated {{ generated_at }}
+# project: {{ project.name }} ({{ project.slug }})
+# upstream: 127.0.0.1:{{ upstream_port }}
+# config id: {{ config_id }}  version: {{ version }}
+# Manual edits are overwritten on the next deploy.
+# ---------------------------------------------------------------------------
+
+upstream {{ upstream_name }} {
+    server 127.0.0.1:{{ upstream_port }} max_fails=3 fail_timeout=15s;
+    keepalive 16;
+}
+
+{% if options.enable_ssl %}
+server {
+    listen 80;
+    listen [::]:80;
+    server_name {{ domain }};
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+{% endif %}
+
+server {
+{% if options.enable_ssl %}
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+
+    ssl_certificate     {{ options.ssl_cert | default('/etc/letsencrypt/live/' ~ domain ~ '/fullchain.pem') }};
+    ssl_certificate_key {{ options.ssl_key  | default('/etc/letsencrypt/live/' ~ domain ~ '/privkey.pem') }};
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_session_cache shared:SSL:10m;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+{% else %}
+    listen 80;
+    listen [::]:80;
+{% endif %}
+
+    server_name {{ domain }};
+
+    # Per-project log files so the copilot can attribute every 502 correctly.
+    access_log /var/log/nginx/{{ project.slug }}.access.log combined;
+    error_log  /var/log/nginx/{{ project.slug }}.error.log warn;
+
+    client_max_body_size {{ options.client_max_body_size | default('10m') }};
+
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options SAMEORIGIN always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+    add_header X-ViljaOps-Project "{{ project.slug }}" always;
+
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript text/xml application/xml image/svg+xml;
+    gzip_min_length 1024;
+
+{% if options.rate_limit %}
+    limit_req zone={{ options.rate_limit_zone | default('viljaops_default') }} burst={{ options.rate_limit_burst | default(20) }} nodelay;
+{% endif %}
+
+    # Health probe that never reaches the app — lets us tell "nginx is down"
+    # apart from "the student's app is down".
+    location = /__viljaops_health {
+        access_log off;
+        return 200 "nginx-ok\n";
+        add_header Content-Type text/plain;
+    }
+
+{% if options.websocket %}
+    location {{ options.websocket_path | default('/ws') }} {
+        proxy_pass http://{{ upstream_name }};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+{% endif %}
+
+{% for extra in options.extra_locations | default([]) %}
+    location {{ extra.path }} {
+        proxy_pass http://{{ upstream_name }}{{ extra.rewrite | default('') }};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+{% endfor %}
+
+    location / {
+        proxy_pass http://{{ upstream_name }};
+        proxy_http_version 1.1;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
+        proxy_set_header Connection        "";
+
+        proxy_connect_timeout {{ options.proxy_connect_timeout | default('5s') }};
+        proxy_send_timeout    {{ options.proxy_send_timeout | default('60s') }};
+        proxy_read_timeout    {{ options.proxy_read_timeout | default('60s') }};
+
+        proxy_buffering on;
+        proxy_buffer_size 8k;
+        proxy_buffers 8 8k;
+
+        # A student app that is still booting should look like "starting",
+        # not like a hard failure.
+        proxy_next_upstream error timeout http_502 http_503 http_504;
+        proxy_intercept_errors on;
+        error_page 502 503 504 = @viljaops_down;
+    }
+
+    location @viljaops_down {
+        default_type text/html;
+        return 503 '<!doctype html><meta charset="utf-8"><title>{{ project.name }} is starting</title><style>body{font-family:system-ui,sans-serif;max-width:34rem;margin:15vh auto;padding:0 1.5rem;color:#1f2328}h1{font-size:1.35rem}code{background:#f0f2f5;padding:.15rem .35rem;border-radius:4px}</style><h1>{{ project.name }} is not responding</h1><p>The application behind this address is starting up or has stopped. The deployment platform has been notified and is diagnosing it automatically.</p><p style="color:#59636e;font-size:.9rem">Project <code>{{ project.slug }}</code> &middot; upstream port {{ upstream_port }}</p>';
+    }
+}

@@ -1,0 +1,242 @@
+# ViljaOps reusable deployment workflow.
+#
+# Student teams add a 12-line caller workflow (see docs/STUDENT_GUIDE.md) and
+# get: platform-assigned ports, automatic Nginx wiring, health-gated rollout,
+# automatic rollback, and AI root cause analysis on failure.
+#
+# Every step reports to the control plane, which is what makes correlated
+# diagnosis possible later — the logs are useless if nobody collected them.
+
+name: ViljaOps Deploy
+
+on:
+  workflow_call:
+    inputs:
+      app_port:
+        description: "Port the application listens on INSIDE the container"
+        type: number
+        default: 8000
+      dockerfile:
+        type: string
+        default: "Dockerfile"
+      build_context:
+        type: string
+        default: "."
+      memory_mb:
+        type: number
+        default: 512
+      health_path:
+        type: string
+        default: "/health"
+      build_args:
+        description: "Newline-separated KEY=VALUE build args (frontend API URLs go here)"
+        type: string
+        default: ""
+    secrets:
+      VILJAOPS_TOKEN:
+        required: true
+
+concurrency:
+  group: viljaops-deploy-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, linux, x64, viljaops]
+    timeout-minutes: 30
+    env:
+      VILJAOPS_URL: ${{ vars.VILJAOPS_URL }}
+      VILJAOPS_TOKEN: ${{ secrets.VILJAOPS_TOKEN }}
+      IMAGE: ${{ github.event.repository.name }}:${{ github.sha }}
+      CONTAINER: ${{ github.event.repository.name }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Register deployment and claim a host port
+        id: register
+        run: |
+          set -euo pipefail
+          RESP=$(curl -fsS -X POST "$VILJAOPS_URL/api/deployments/start" \
+            -H "Authorization: Bearer $VILJAOPS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d @- <<JSON
+          {
+            "repo": "${{ github.repository }}",
+            "commit_sha": "${{ github.sha }}",
+            "branch": "${{ github.ref_name }}",
+            "gh_run_id": "${{ github.run_id }}",
+            "gh_run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+            "triggered_by": "${{ github.actor }}",
+            "container_name": "${{ github.event.repository.name }}"
+          }
+          JSON
+          )
+          echo "$RESP" | python3 -c '
+          import json,sys,os
+          d=json.load(sys.stdin)
+          with open(os.environ["GITHUB_OUTPUT"],"a") as f:
+              f.write(f"deployment_id={d[\"id\"]}\n")
+              f.write(f"port={d[\"port\"]}\n")
+              f.write(f"domain={d.get(\"domain\",\"\")}\n")
+          '
+          echo "::notice::ViljaOps assigned host port $(echo "$RESP" | python3 -c 'import json,sys;print(json.load(sys.stdin)["port"])')"
+
+      - name: Build image
+        id: build
+        run: |
+          set -euo pipefail
+          ARGS=()
+          while IFS= read -r line; do
+            [ -n "$line" ] && ARGS+=(--build-arg "$line")
+          done <<< "${{ inputs.build_args }}"
+          docker build \
+            -f "${{ inputs.dockerfile }}" \
+            -t "$IMAGE" \
+            "${ARGS[@]}" \
+            "${{ inputs.build_context }}"
+
+      - name: Start container on the assigned port
+        id: run
+        run: |
+          set -euo pipefail
+          PORT="${{ steps.register.outputs.port }}"
+          ENV_FILE="/etc/viljaops/env/${CONTAINER}.env"
+          ENV_ARG=""
+          [ -f "$ENV_FILE" ] && ENV_ARG="--env-file $ENV_FILE"
+
+          docker rm -f "$CONTAINER" 2>/dev/null || true
+          docker run -d \
+            --name "$CONTAINER" \
+            --restart unless-stopped \
+            --memory "${{ inputs.memory_mb }}m" \
+            --memory-swap "${{ inputs.memory_mb }}m" \
+            --label viljaops.managed=true \
+            --label viljaops.repo="${{ github.repository }}" \
+            --log-opt max-size=10m --log-opt max-file=3 \
+            $ENV_ARG \
+            -p "127.0.0.1:${PORT}:${{ inputs.app_port }}" \
+            "$IMAGE"
+
+      - name: Wait for health
+        id: health
+        run: |
+          set -euo pipefail
+          PORT="${{ steps.register.outputs.port }}"
+          URL="http://127.0.0.1:${PORT}${{ inputs.health_path }}"
+          for i in $(seq 1 30); do
+            if curl -fsS --max-time 4 "$URL" >/dev/null 2>&1; then
+              echo "::notice::Healthy after ${i} attempts"
+              exit 0
+            fi
+            if [ "$(docker inspect -f '{{.State.Status}}' "$CONTAINER")" = "exited" ]; then
+              echo "::error::Container exited during startup"
+              break
+            fi
+            sleep 4
+          done
+          echo "::error::Application never became healthy at ${{ inputs.health_path }}"
+          exit 1
+
+      # Runs on success AND failure — the failure logs are the whole point.
+      - name: Ship container logs to ViljaOps
+        if: always()
+        continue-on-error: true
+        run: |
+          LOGS=$(docker logs --timestamps --tail 500 "$CONTAINER" 2>&1 || echo "no container logs")
+          python3 - <<'PY'
+          import json, os, subprocess, urllib.request
+          logs = subprocess.run(
+              ["docker","logs","--timestamps","--tail","500", os.environ["CONTAINER"]],
+              capture_output=True, text=True
+          )
+          body = json.dumps({
+              "deployment_id": os.environ["DEPLOYMENT_ID"],
+              "source": "docker",
+              "container": os.environ["CONTAINER"],
+              "text": (logs.stdout + "\n" + logs.stderr)[:400000],
+          }).encode()
+          req = urllib.request.Request(
+              os.environ["VILJAOPS_URL"] + "/api/deployments/logs",
+              data=body,
+              headers={
+                  "Authorization": "Bearer " + os.environ["VILJAOPS_TOKEN"],
+                  "Content-Type": "application/json",
+              },
+              method="POST",
+          )
+          try:
+              print(urllib.request.urlopen(req, timeout=30).read().decode())
+          except Exception as e:
+              print("log shipping failed:", e)
+          PY
+        env:
+          DEPLOYMENT_ID: ${{ steps.register.outputs.deployment_id }}
+
+      - name: Roll back on failure
+        id: rollback
+        if: failure()
+        continue-on-error: true
+        run: |
+          echo "::warning::Deployment failed — stopping the broken container"
+          docker rm -f "$CONTAINER" 2>/dev/null || true
+
+          # Ask ViljaOps for this project's actual deployment history — the
+          # most recent OTHER deployment that reported status=running, i.e.
+          # survived its own health check — rather than guessing from local
+          # `docker images` output, which is Docker's build/pull order and
+          # has no relationship to which past deployment was ever confirmed
+          # healthy. Only fall back to the old heuristic if the control
+          # plane can't be reached at all, so a rollback is still possible
+          # during a control-plane outage.
+          PREV=$(curl -fsS "$VILJAOPS_URL/api/deployments/${{ steps.register.outputs.deployment_id }}/last-good" \
+            -H "Authorization: Bearer $VILJAOPS_TOKEN" 2>/dev/null \
+            | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["image"] or "")' 2>/dev/null || echo "")
+
+          if [ -z "$PREV" ]; then
+            echo "::warning::Could not get last-known-good from ViljaOps — falling back to local image history"
+            PREV=$(docker images --format '{{.Repository}}:{{.Tag}}' "${{ github.event.repository.name }}" | sed -n 2p)
+          fi
+
+          if [ -z "$PREV" ]; then
+            echo "::warning::No previous known-good image found — nothing to roll back to"
+            echo "status=not_attempted" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "::notice::Restoring previous image $PREV"
+          docker run -d --name "$CONTAINER" --restart unless-stopped \
+            --memory "${{ inputs.memory_mb }}m" \
+            -p "127.0.0.1:${{ steps.register.outputs.port }}:${{ inputs.app_port }}" "$PREV" || true
+
+          # Don't just assume the restore worked because the command
+          # returned — confirm the container is actually running before
+          # telling ViljaOps rollback succeeded. A rollback that silently
+          # failed is worse than one that's reported honestly: the project
+          # would have NO application running at all, and nothing would say
+          # so.
+          sleep 3
+          STATE=$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null || echo "false")
+          if [ "$STATE" = "true" ]; then
+            echo "::notice::Rollback confirmed running"
+            echo "status=succeeded" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Rollback image did not start — this project has NO running deployment"
+            echo "status=failed" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Report outcome
+        if: always()
+        run: |
+          ROLLBACK_STATUS="${{ steps.rollback.outputs.status || 'not_attempted' }}"
+          curl -fsS -X POST "$VILJAOPS_URL/api/deployments/${{ steps.register.outputs.deployment_id }}/finish" \
+            -H "Authorization: Bearer $VILJAOPS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"status\":\"${{ job.status }}\",\"image\":\"$IMAGE\",\"container_name\":\"$CONTAINER\",\"rollback_status\":\"$ROLLBACK_STATUS\"}" \
+            || echo "could not report outcome"
+          if [ "${{ job.status }}" != "success" ]; then
+            echo "::notice::ViljaOps is diagnosing this failure. Open the dashboard for the root cause."
+          fi
+          if [ "$ROLLBACK_STATUS" = "failed" ]; then
+            echo "::error::This project has no running deployment — rollback to the previous image also failed."
+          fi

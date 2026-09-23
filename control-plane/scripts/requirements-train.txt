@@ -1,0 +1,13 @@
+# Only needed on the GPU training node (GPU #2 in the docs' split), not in
+# the control-plane container that serves the API. Install with:
+#   pip install -r scripts/requirements-train.txt --break-system-packages
+#
+# Versions are loose on purpose — pin them once you've picked a base model
+# and driver stack, this is a reasonable starting point for CUDA 12.1+.
+torch>=2.3
+transformers>=4.44
+peft>=0.12
+trl>=0.9
+accelerate>=0.33
+bitsandbytes>=0.43
+datasets>=2.20

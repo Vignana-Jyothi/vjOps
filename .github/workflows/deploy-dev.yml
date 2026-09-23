@@ -1,0 +1,27 @@
+name: Deploy ViljaOps Dev
+
+on:
+  push:
+    branches:
+      - dev
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, dev-ai]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Copy env template (if needed)
+        run: |
+          if [ ! -f .env ]; then
+            cp .env.example .env
+          fi
+
+      - name: Deploy application
+        run: |
+          docker compose up -d --build
+
+      - name: Check services
+        run: |
+          docker compose ps
