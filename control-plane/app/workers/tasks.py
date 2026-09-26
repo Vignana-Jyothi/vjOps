@@ -42,7 +42,7 @@ def analyze_repo_task(project_id: str, ref: str = "", use_llm: bool = True):
             return {"error": "project not found or has no repository"}
 
         dest = Path(settings.repo_cache_dir) / project.slug
-        clone = repo_analyzer.clone_repo(project.github_repo, dest, ref=ref or project.default_branch)
+        clone = repo_analyzer.clone_repo(project.github_repo, dest, ref=ref or project.default_branch, token=settings.github_token)
         if not clone["ok"]:
             return {"error": clone["error"]}
 

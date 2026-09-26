@@ -152,7 +152,7 @@ def analyze_project(
         raise HTTPException(400, "This project has no GitHub repository configured")
 
     dest = Path(settings.repo_cache_dir) / project.slug
-    clone = repo_analyzer.clone_repo(project.github_repo, dest, ref=payload.ref or project.default_branch)
+    clone = repo_analyzer.clone_repo(project.github_repo, dest, ref=payload.ref or project.default_branch, token=settings.github_token)
     if not clone["ok"]:
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY,
