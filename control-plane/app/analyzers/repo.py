@@ -45,9 +45,16 @@ def clone_repo(repo: str, dest: Path, *, ref: str = "", token: str = "") -> dict
     dest.parent.mkdir(parents=True, exist_ok=True)
 
     url = repo
-    if "://" not in repo:
-        tok = token or settings.github_token
-        url = f"https://{tok}@github.com/{repo}.git" if tok else f"https://github.com/{repo}.git"
+    tok = token or settings.github_token
+    if tok:
+        if "://" not in repo:
+            url = f"https://{tok}@github.com/{repo}.git"
+        elif "://" in repo and "@" not in repo:
+            # Inject token into a full URL (e.g. https://github.com/... -> https://token@github.com/...)
+            parts = repo.split("://", 1)
+            url = f"{parts[0]}://{tok}@{parts[1]}"
+    elif "://" not in repo:
+        url = f"https://github.com/{repo}.git"
 
     cmd = ["git", "clone", "--depth", "50", "--no-tags"]
     if ref:
