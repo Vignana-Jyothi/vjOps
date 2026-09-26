@@ -15,6 +15,20 @@ export default function Infrastructure() {
   const [token, setToken] = useState('')
   const [nginxForm, setNginxForm] = useState({ project_id: '', domain: '', upstream_port: '' })
   const [preview, setPreview] = useState('')
+  const [editingServer, setEditingServer] = useState<any>(null)
+  const [editForm, setEditForm] = useState({ name: '', hostname: '', port_range_start: 3000, port_range_end: 3999 })
+
+  async function saveEdit(e: React.FormEvent) {
+    e.preventDefault()
+    setError('')
+    try {
+      await api.patch(`/api/agents/servers/${editingServer.id}`, editForm)
+      setEditingServer(null)
+      load()
+    } catch (err: any) {
+      setError(err.message)
+    }
+  }
 
   async function load() {
     try {
@@ -165,13 +179,83 @@ export default function Infrastructure() {
                     <div className="mt-1 text-[11px] text-slate-500">
                       {s.cpu_cores} cores · {Math.round(s.ram_mb / 1024)} GB · ports {s.port_range_start}–{s.port_range_end}
                     </div>
-                    <div className="text-[11px] text-slate-600">last seen {fmt.ago(s.last_seen)}</div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] text-slate-600">last seen {fmt.ago(s.last_seen)}</span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEditForm({ name: s.name, hostname: s.hostname, port_range_start: s.port_range_start, port_range_end: s.port_range_end });
+                          setEditingServer(s);
+                        }}
+                        className="text-[11px] text-sky-400 hover:text-sky-300 transition-colors"
+                      >
+                        Edit
+                      </button>
+                    </div>
                   </button>
                 </li>
               ))}
             </ul>
           )}
         </Card>
+
+        {editingServer && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+            <div className="w-full max-w-md rounded-xl border border-ink-600 bg-ink-800 p-6 shadow-2xl">
+              <h3 className="text-lg font-medium text-slate-200">Edit Server</h3>
+              <form onSubmit={saveEdit} className="mt-4 space-y-4">
+                <div>
+                  <label className="block text-xs font-medium text-slate-400">Name</label>
+                  <input
+                    className="input-text w-full mt-1"
+                    value={editForm.name}
+                    onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-400">Hostname</label>
+                  <input
+                    className="input-text w-full mt-1"
+                    value={editForm.hostname}
+                    onChange={(e) => setEditForm({ ...editForm, hostname: e.target.value })}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-400">Port range start</label>
+                    <input
+                      type="number"
+                      className="input-text w-full mt-1"
+                      value={editForm.port_range_start}
+                      onChange={(e) => setEditForm({ ...editForm, port_range_start: parseInt(e.target.value) })}
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-400">Port range end</label>
+                    <input
+                      type="number"
+                      className="input-text w-full mt-1"
+                      value={editForm.port_range_end}
+                      onChange={(e) => setEditForm({ ...editForm, port_range_end: parseInt(e.target.value) })}
+                      required
+                    />
+                  </div>
+                </div>
+                <div className="mt-6 flex justify-end gap-3">
+                  <button type="button" onClick={() => setEditingServer(null)} className="btn-secondary">
+                    Cancel
+                  </button>
+                  <button type="submit" className="btn-primary">
+                    Save Changes
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
 
         <Card title="Port registry" className="lg:col-span-2">
           {!usage ? (

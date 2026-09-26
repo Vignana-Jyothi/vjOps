@@ -40,6 +40,12 @@ class ServerCreate(BaseModel):
     cpu_cores: int = 0
     ram_mb: int = 0
     disk_gb: int = 0
+
+class ServerUpdate(BaseModel):
+    name: str | None = None
+    hostname: str | None = None
+    port_range_start: int | None = None
+    port_range_end: int | None = None
     port_range_start: int | None = None
     port_range_end: int | None = None
 

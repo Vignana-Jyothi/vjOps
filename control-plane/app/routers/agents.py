@@ -25,7 +25,7 @@ from ..models import (
 )
 from ..observability import anomaly
 from ..remediation.verify import start_verification
-from ..schemas import CommandOut, CommandResult, HeartbeatIn, ServerCreate, ServerEnrolled, ServerOut
+from ..schemas import CommandOut, CommandResult, HeartbeatIn, ServerCreate, ServerEnrolled, ServerOut, ServerUpdate
 from ..security import hash_agent_token, new_agent_token
 
 log = logging.getLogger(__name__)
@@ -92,6 +92,27 @@ def rotate_token(server_id: str, db: Session = Depends(get_db), user: User = Dep
     return ServerEnrolled(**_server_out(server).model_dump(), agent_token=token)
 
 
+@router.patch("/servers/{server_id}", response_model=ServerOut)
+def update_server(server_id: str, payload: ServerUpdate, db: Session = Depends(get_db), user: User = Depends(require_devops)):
+    server = db.get(Server, server_id)
+    if not server:
+        raise HTTPException(404, "Server not found")
+    
+    if payload.name is not None:
+        if payload.name != server.name and db.query(Server).filter(Server.name == payload.name).first():
+            raise HTTPException(400, "A server with this name already exists")
+        server.name = payload.name
+    
+    if payload.hostname is not None:
+        server.hostname = payload.hostname
+    if payload.port_range_start is not None:
+        server.port_range_start = payload.port_range_start
+    if payload.port_range_end is not None:
+        server.port_range_end = payload.port_range_end
+    
+    db.commit()
+    audit(db, "server.update", actor=user.email, actor_role=user.role, target_type="server", target_id=server.id, detail={"name": server.name})
+    return _server_out(server)
 # --------------------------------------------------------------------------- #
 # Agent-facing
 # --------------------------------------------------------------------------- #

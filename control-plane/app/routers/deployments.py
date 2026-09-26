@@ -222,7 +222,9 @@ def ingest_logs(payload: LogIngest, db: Session = Depends(get_db), server: Serve
                 .first()
             )
     if not dep:
-        raise HTTPException(404, "Could not attach these logs to a deployment")
+        # Silently ignore logs for unknown/external deployments instead of throwing a 404
+        # which causes the agent to get stuck in an infinite retry loop.
+        return {"detail": "Ignored"}
     if dep.server_id != server.id:
         raise HTTPException(403, "This deployment does not belong to your server")
 
