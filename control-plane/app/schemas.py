@@ -46,8 +46,6 @@ class ServerUpdate(BaseModel):
     hostname: str | None = None
     port_range_start: int | None = None
     port_range_end: int | None = None
-    port_range_start: int | None = None
-    port_range_end: int | None = None
 
 
 class ServerOut(BaseModel):
