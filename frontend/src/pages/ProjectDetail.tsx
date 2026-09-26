@@ -170,20 +170,49 @@ export default function ProjectDetail() {
           </div>
 
           <Card>
-            <div className="mb-4 flex gap-1 border-b border-ink-600">
-              {(['findings', 'plan', 'artifacts', 'detected'] as const).map((t) => (
-                <button
-                  key={t}
-                  onClick={() => setTab(t)}
-                  className={`px-3 py-2 text-sm capitalize transition-colors ${
-                    tab === t ? 'border-b-2 border-sky-500 text-slate-100' : 'text-slate-500 hover:text-slate-300'
-                  }`}
-                >
-                  {t}
-                  {t === 'findings' && ` (${findings.length})`}
-                  {t === 'artifacts' && ` (${Object.keys(analysis.artifacts || {}).length})`}
-                </button>
-              ))}
+            <div className="mb-4 flex items-center justify-between border-b border-ink-600">
+              <div className="flex gap-1">
+                {(['findings', 'plan', 'artifacts', 'detected'] as const).map((t) => (
+                  <button
+                    key={t}
+                    onClick={() => setTab(t)}
+                    className={`px-3 py-2 text-sm capitalize transition-colors ${
+                      tab === t ? 'border-b-2 border-sky-500 text-slate-100' : 'text-slate-500 hover:text-slate-300'
+                    }`}
+                  >
+                    {t}
+                    {t === 'findings' && ` (${findings.length})`}
+                    {t === 'artifacts' && ` (${Object.keys(analysis.artifacts || {}).length})`}
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={() => {
+                  let text = `ViljaOps Readiness Report: ${p.name}\n\n`;
+                  text += `FINDINGS (${findings.length}):\n`;
+                  findings.forEach((f: any) => {
+                    text += `[${f.severity.toUpperCase()}] ${f.title}\nDetail: ${f.detail}\nFix: ${f.fix}\n\n`;
+                  });
+                  if (analysis.plan?.steps) {
+                    text += `\nDEPLOYMENT PLAN:\n`;
+                    analysis.plan.steps.forEach((s: any) => {
+                      text += `${s.n}. ${s.title} (${s.automated ? 'automated' : s.owner})\n${s.detail}\n\n`;
+                    });
+                  }
+                  const blob = new Blob([text], { type: 'text/plain' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `${p.name}-readiness-report.txt`;
+                  document.body.appendChild(a);
+                  a.click();
+                  document.body.removeChild(a);
+                  URL.revokeObjectURL(url);
+                }}
+                className="mb-1 mr-2 rounded bg-ink-700 px-3 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:bg-ink-600 hover:text-white"
+              >
+                Download Report (.txt)
+              </button>
             </div>
 
             {tab === 'findings' && (
