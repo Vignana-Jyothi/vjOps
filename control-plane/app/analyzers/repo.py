@@ -118,7 +118,7 @@ def analyze(root: Path, *, use_llm: bool = True) -> dict:
                 add(_f("container_root", "containerization", WARNING,
                        "Container runs as root",
                        "On a shared server, a compromised root container is a much bigger problem than a compromised unprivileged one.",
-                       "Create a non-root user and add a USER instruction before CMD."))
+                       "Create a non-root user and add a USER instruction before CMD (e.g. 'RUN useradd -m appuser' followed by 'USER appuser')."))
             if df.get("apt_without_cleanup"):
                 add(_f("apt_no_cleanup", "containerization", INFO,
                        "apt lists not cleaned up",
