@@ -10,7 +10,7 @@ from ..analyzers.plan import recommend_resources
 from ..config import settings
 from ..db import get_db
 from ..deps import audit, current_user, require_devops
-from ..models import Deployment, Incident, Project, RepoAnalysis, RiskSnapshot, Role, User
+from ..models import Deployment, Incident, Project, RepoAnalysis, RiskSnapshot, Role, Server, User
 from ..schemas import (
     AnalysisOut,
     AnalyzeRequest,
@@ -42,11 +42,26 @@ def list_projects(
     return q.order_by(Project.created_at.desc()).limit(500).all()
 
 
+_REFS = {"owner_id": (User, "Owner"), "mentor_id": (User, "Mentor"), "server_id": (Server, "Server")}
+
+
+def _check_refs(db: Session, values: dict) -> dict:
+    """Turn "" into None and reject ids that don't exist, instead of a foreign-key 500."""
+    for field, (model, label) in _REFS.items():
+        if field not in values:
+            continue
+        if not values[field]:
+            values[field] = None
+        elif not db.get(model, values[field]):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"{label} not found")
+    return values
+
+
 @router.post("", response_model=ProjectOut, status_code=201)
 def create_project(payload: ProjectCreate, db: Session = Depends(get_db), actor: User = Depends(require_devops)):
     if db.query(Project).filter(Project.slug == payload.slug).first():
         raise HTTPException(status.HTTP_409_CONFLICT, f"Slug '{payload.slug}' is already taken")
-    project = Project(**payload.model_dump())
+    project = Project(**_check_refs(db, payload.model_dump()))
     db.add(project)
     db.commit()
     audit(db, "project.create", actor=actor.email, actor_role=actor.role, target_type="project", target_id=project.id)
@@ -66,7 +81,7 @@ def update_project(project_id: str, payload: ProjectUpdate, db: Session = Depend
     project = db.get(Project, project_id)
     if not project:
         raise HTTPException(404, "Project not found")
-    for k, v in payload.model_dump(exclude_none=True).items():
+    for k, v in _check_refs(db, payload.model_dump(exclude_none=True)).items():
         setattr(project, k, v)
     db.commit()
     audit(db, "project.update", actor=actor.email, actor_role=actor.role, target_type="project", target_id=project.id)

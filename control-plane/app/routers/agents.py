@@ -49,6 +49,11 @@ def _server_out(s: Server) -> ServerOut:
     )
 
 
+def _check_port_range(start: int, end: int) -> None:
+    if not (1 <= start <= end <= 65535):
+        raise HTTPException(400, f"Invalid port range {start}–{end}: the start must not be above the end, and both must be 1–65535")
+
+
 # --------------------------------------------------------------------------- #
 # Enrollment (human, from the dashboard)
 # --------------------------------------------------------------------------- #
@@ -56,6 +61,7 @@ def _server_out(s: Server) -> ServerOut:
 def enroll_server(payload: ServerCreate, db: Session = Depends(get_db), user: User = Depends(require_devops)):
     if db.query(Server).filter(Server.name == payload.name).first():
         raise HTTPException(409, f"A server named '{payload.name}' is already enrolled")
+    _check_port_range(payload.port_range_start or settings.port_range_start, payload.port_range_end or settings.port_range_end)
     token = new_agent_token()
     server = Server(
         name=payload.name,
@@ -109,7 +115,8 @@ def update_server(server_id: str, payload: ServerUpdate, db: Session = Depends(g
         server.port_range_start = payload.port_range_start
     if payload.port_range_end is not None:
         server.port_range_end = payload.port_range_end
-    
+    _check_port_range(server.port_range_start, server.port_range_end)
+
     db.commit()
     audit(db, "server.update", actor=user.email, actor_role=user.role, target_type="server", target_id=server.id, detail={"name": server.name})
     return _server_out(server)

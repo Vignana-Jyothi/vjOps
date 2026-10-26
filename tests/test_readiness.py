@@ -112,6 +112,16 @@ def test_good_repo_scores_well_and_has_no_blockers(good_repo):
     assert result["verdict"] in ("ready", "ready_with_changes")
 
 
+def test_a_single_blocker_caps_the_score_instead_of_zeroing_it(good_repo):
+    # Fixing non-blocking issues must never make the score drop: a mostly-good
+    # repo with one blocker is capped at 45, not reset to 0.
+    (good_repo / ".env").write_text("DATABASE_URL=postgres://u:p@db/app\n")
+    result = analyze(good_repo, use_llm=False)
+    assert result["blocking_count"] > 0
+    assert result["score"] == 45
+    assert result["verdict"] == "not_ready"
+
+
 def test_bad_repo_is_blocked_and_names_the_reasons(bad_repo):
     result = analyze(bad_repo, use_llm=False)
     ids = {f["id"] for f in result["findings"]}

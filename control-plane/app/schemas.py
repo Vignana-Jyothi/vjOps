@@ -28,12 +28,25 @@ class SignupRequest(BaseModel):
     name: str = ""
 
 
+class UserUpdate(BaseModel):
+    name: str | None = None
+    role: Literal["admin", "devops", "mentor", "student"] | None = None
+    is_active: bool | None = None
+    password: str | None = Field(default=None, min_length=8)
+
+
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8)
+
+
 class UserOut(BaseModel):
     id: str
     email: str
     name: str
     role: str
     is_active: bool
+    created_at: datetime
 
     class Config:
         from_attributes = True
@@ -46,6 +59,9 @@ class ServerCreate(BaseModel):
     cpu_cores: int = 0
     ram_mb: int = 0
     disk_gb: int = 0
+    port_range_start: int | None = None
+    port_range_end: int | None = None
+
 
 class ServerUpdate(BaseModel):
     name: str | None = None
@@ -93,6 +109,9 @@ class ProjectUpdate(BaseModel):
     name: str | None = None
     github_repo: str | None = None
     team_name: str | None = None
+    default_branch: str | None = None
+    # For the three references below, "" clears the field; omitting it leaves it unchanged.
+    owner_id: str | None = None
     mentor_id: str | None = None
     server_id: str | None = None
     domain: str | None = None

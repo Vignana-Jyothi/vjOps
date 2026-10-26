@@ -1,7 +1,82 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Card, ErrorBox, Empty, Pill, Spinner, Stat } from '../components/ui'
-import { api, fmt } from '../lib/api'
+import { api, auth, fmt } from '../lib/api'
+
+function GettingStarted({ data }: { data: any }) {
+  const online = data.servers.online > 0
+  const steps = [
+    {
+      done: data.servers.total > 0,
+      title: 'Enroll a deployment server',
+      detail: 'Infrastructure → Enroll server. You get a one-time agent token.',
+      to: '/infrastructure',
+    },
+    {
+      done: online,
+      title: 'Install the agent on that server',
+      detail: 'Run the install command shown after enrolling. The server turns green once the agent checks in.',
+      to: '/infrastructure',
+    },
+    {
+      done: data.projects > 0,
+      title: 'Register a student project',
+      detail: 'Projects → Register project. Link the GitHub repo and assign the student who owns it.',
+      to: '/projects',
+    },
+    {
+      done: data.setup.analyses > 0,
+      title: 'Run a readiness analysis',
+      detail: 'Open the project and click "Run readiness analysis" to score the repo and generate a Dockerfile and deploy plan.',
+      to: '/projects',
+    },
+    {
+      done: data.setup.deployments > 0,
+      title: 'Deploy through GitHub Actions',
+      detail: 'Add the generated workflow to the repo. Failed deployments show up under Incidents with a diagnosis.',
+      to: '/projects',
+    },
+    {
+      done: data.setup.users > 1,
+      title: 'Invite your team',
+      detail: 'Students can sign up from the login page. Promote mentors and DevOps staff from Users.',
+      to: auth.can('admin') ? '/users' : '/projects',
+    },
+  ]
+  const remaining = steps.filter((s) => !s.done).length
+  if (remaining === 0) return null
+  const next = steps.findIndex((s) => !s.done)
+
+  return (
+    <Card title={`Getting started · ${steps.length - remaining} of ${steps.length} done`}>
+      <ol className="space-y-2">
+        {steps.map((s, i) => (
+          <li key={s.title}>
+            <Link
+              to={s.to}
+              className={`flex items-start gap-3 rounded-md border p-3 transition-colors ${
+                i === next ? 'border-sky-600/50 bg-sky-500/5 hover:bg-sky-500/10' : 'border-ink-600 hover:bg-ink-700/40'
+              }`}
+            >
+              <span
+                className={`grid h-6 w-6 shrink-0 place-items-center rounded-full text-xs ${
+                  s.done ? 'bg-emerald-500/20 text-emerald-300' : i === next ? 'bg-sky-600 text-white' : 'bg-ink-700 text-slate-400'
+                }`}
+              >
+                {s.done ? '✓' : i + 1}
+              </span>
+              <div className="min-w-0">
+                <div className={`text-sm font-medium ${s.done ? 'text-slate-500 line-through' : 'text-slate-200'}`}>{s.title}</div>
+                {!s.done && <p className="mt-0.5 text-xs text-slate-500">{s.detail}</p>}
+              </div>
+              {i === next && <span className="ml-auto shrink-0 text-xs text-sky-300">Start here →</span>}
+            </Link>
+          </li>
+        ))}
+      </ol>
+    </Card>
+  )
+}
 
 export default function Dashboard() {
   const [data, setData] = useState<any>(null)
@@ -36,13 +111,28 @@ export default function Dashboard() {
 
   const dep = data.deployments_7d
   const inc = data.incidents
+  const isStudent = auth.user?.role === 'student'
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-lg font-semibold">Platform overview</h1>
-        <p className="text-sm text-slate-500">Live state of every student deployment across the incubator.</p>
+        <p className="text-sm text-slate-500">
+          {isStudent ? 'Live state of your team’s deployments.' : 'Live state of every student deployment across the incubator.'}
+        </p>
       </div>
+
+      {auth.can('admin', 'devops') && <GettingStarted data={data} />}
+
+      {isStudent && data.projects === 0 && (
+        <Card title="Welcome to ViljaOps">
+          <p className="text-sm text-slate-400">
+            No project is linked to your account yet. Ask your incubator's DevOps admin to assign your team's project to{' '}
+            <span className="font-mono text-slate-200">{auth.user?.email}</span>. Once they do, you'll see its readiness
+            score, deployments and any failure diagnoses here.
+          </p>
+        </Card>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Stat label="Active projects" value={data.projects} />
@@ -89,7 +179,7 @@ export default function Dashboard() {
         </Card>
 
         <div className="space-y-6">
-          <Card title="Servers">
+          {!isStudent && <Card title="Servers">
             {data.servers.names.length === 0 ? (
               <Empty>No servers enrolled yet.</Empty>
             ) : (
@@ -105,7 +195,7 @@ export default function Dashboard() {
                 ))}
               </ul>
             )}
-          </Card>
+          </Card>}
 
           <Card title={`Predicted failures (${anomalies.length})`}>
             {anomalies.length === 0 ? (

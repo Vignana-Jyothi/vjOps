@@ -85,6 +85,13 @@ services:
     build: ./control-plane
     command: ["celery", "-A", "app.workers.celery_app:celery", "worker", "-l", "info", "-Q", "analysis,rca,infra"]
     environment: *cp-env
+    # The image's HEALTHCHECK probes the API port, which a worker doesn't serve.
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.workers.celery_app:celery inspect ping -d celery@$$HOSTNAME -t 10"]
+      interval: 60s
+      timeout: 20s
+      start_period: 30s
+      retries: 3
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
@@ -96,6 +103,8 @@ services:
     build: ./control-plane
     command: ["celery", "-A", "app.workers.celery_app:celery", "beat", "-l", "info"]
     environment: *cp-env
+    healthcheck:
+      disable: true
     depends_on:
       redis: {condition: service_healthy}
     restart: unless-stopped

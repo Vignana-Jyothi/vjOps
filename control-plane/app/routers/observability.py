@@ -15,7 +15,9 @@ from ..models import (
     IncidentStatus,
     MetricSample,
     Project,
+    RepoAnalysis,
     RiskSnapshot,
+    Role,
     Server,
     User,
     utcnow,
@@ -26,15 +28,25 @@ from ..observability import risk as risk_svc
 router = APIRouter(prefix="/api/observability", tags=["observability"])
 
 
+def _owned_project_ids(db: Session, user: User) -> list[str] | None:
+    """Students only see their own projects' data; None means "everything"."""
+    if user.role != Role.student.value:
+        return None
+    return [p.id for p in db.query(Project.id).filter(Project.owner_id == user.id).all()]
+
+
 @router.get("/anomalies")
 def list_anomalies(
     project_id: str | None = None,
     acknowledged: bool = False,
     limit: int = Query(100, le=300),
     db: Session = Depends(get_db),
-    _: User = Depends(current_user),
+    user: User = Depends(current_user),
 ):
     q = db.query(Anomaly).filter(Anomaly.acknowledged.is_(acknowledged))
+    owned = _owned_project_ids(db, user)
+    if owned is not None:
+        q = q.filter(Anomaly.project_id.in_(owned))
     if project_id:
         q = q.filter(Anomaly.project_id == project_id)
     rows = q.order_by(Anomaly.detected_at.desc()).limit(limit).all()
@@ -153,21 +165,26 @@ def risk_history(project_id: str, limit: int = Query(30, le=200), db: Session = 
 
 # --------------------------------------------------------------------------- #
 @router.get("/dashboard")
-def dashboard(db: Session = Depends(get_db), _: User = Depends(current_user)):
+def dashboard(db: Session = Depends(get_db), user: User = Depends(current_user)):
     day = utcnow() - timedelta(days=1)
     week = utcnow() - timedelta(days=7)
+    owned = _owned_project_ids(db, user)
 
-    deps_week = db.query(Deployment).filter(Deployment.started_at >= week).all()
+    def scoped(q, col):
+        return q if owned is None else q.filter(col.in_(owned))
+
+    deps_week = scoped(db.query(Deployment), Deployment.project_id).filter(Deployment.started_at >= week).all()
     failed_week = [d for d in deps_week if d.status == DeploymentStatus.failed.value]
     open_incidents = (
-        db.query(Incident)
+        scoped(db.query(Incident), Incident.project_id)
         .filter(Incident.status.notin_((IncidentStatus.resolved.value, IncidentStatus.dismissed.value)))
         .all()
     )
-    servers = db.query(Server).all()
+    # Server inventory is infrastructure detail students don't need.
+    servers = db.query(Server).all() if owned is None else []
 
     diagnosed = [i for i in open_incidents if i.confidence >= 0.6]
-    resolved_week = db.query(Incident).filter(Incident.resolved_at >= week).all()
+    resolved_week = scoped(db.query(Incident), Incident.project_id).filter(Incident.resolved_at >= week).all()
     mttr = None
     if resolved_week:
         durations = [
@@ -179,7 +196,7 @@ def dashboard(db: Session = Depends(get_db), _: User = Depends(current_user)):
             mttr = round(sum(durations) / len(durations), 1)
 
     return {
-        "projects": db.query(Project).filter(Project.archived.is_(False)).count(),
+        "projects": scoped(db.query(Project), Project.id).filter(Project.archived.is_(False)).count(),
         "servers": {
             "total": len(servers),
             "online": len([s for s in servers if s.online]),
@@ -189,7 +206,7 @@ def dashboard(db: Session = Depends(get_db), _: User = Depends(current_user)):
             "total": len(deps_week),
             "failed": len(failed_week),
             "success_rate": round(1 - len(failed_week) / len(deps_week), 3) if deps_week else None,
-            "last_24h": len([d for d in deps_week if d.started_at >= day]),
+            "last_24h": scoped(db.query(Deployment), Deployment.project_id).filter(Deployment.started_at >= day).count(),
         },
         "incidents": {
             "open": len(open_incidents),
@@ -198,5 +215,11 @@ def dashboard(db: Session = Depends(get_db), _: User = Depends(current_user)):
             "auto_diagnosis_rate": round(len(diagnosed) / len(open_incidents), 3) if open_incidents else None,
             "mean_time_to_resolve_min": mttr,
         },
-        "anomalies_open": db.query(Anomaly).filter(Anomaly.acknowledged.is_(False)).count(),
+        "anomalies_open": scoped(db.query(Anomaly), Anomaly.project_id).filter(Anomaly.acknowledged.is_(False)).count(),
+        # Drives the dashboard's getting-started checklist.
+        "setup": {
+            "analyses": scoped(db.query(RepoAnalysis), RepoAnalysis.project_id).count(),
+            "deployments": scoped(db.query(Deployment), Deployment.project_id).count(),
+            "users": db.query(User).count() if owned is None else None,
+        },
     }

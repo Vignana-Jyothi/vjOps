@@ -269,7 +269,7 @@ def analyze(root: Path, *, use_llm: bool = True) -> dict:
     breakdown = _score(findings)
     total = sum(breakdown[c]["earned"] for c in WEIGHTS)
     blockers = [f for f in findings if f["severity"] == BLOCKER]
-    score = 0 if blockers and total > 40 else int(round(total))
+    score = int(round(total))
     if blockers:
         score = min(score, 45)  # cannot be "ready" with a blocker outstanding
 

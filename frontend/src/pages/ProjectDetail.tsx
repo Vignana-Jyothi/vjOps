@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { Card, Empty, ErrorBox, Pill, ScoreRing, Spinner } from '../components/ui'
-import { api, fmt } from '../lib/api'
+import { api, auth, fmt } from '../lib/api'
+import { UserSelect } from './Projects'
 
 const CATEGORY_LABEL: Record<string, string> = {
   containerization: 'Containerization',
@@ -9,6 +10,104 @@ const CATEGORY_LABEL: Record<string, string> = {
   security: 'Security',
   operability: 'Operability',
   build_quality: 'Build quality',
+}
+
+function EditProject({ project, onSaved, onCancel }: { project: any; onSaved: () => void; onCancel: () => void }) {
+  const [form, setForm] = useState({
+    name: project.name,
+    github_repo: project.github_repo,
+    default_branch: project.default_branch,
+    team_name: project.team_name,
+    domain: project.domain,
+    health_path: project.health_path,
+    server_id: project.server_id || '',
+    owner_id: project.owner_id || '',
+    mentor_id: project.mentor_id || '',
+  })
+  const [users, setUsers] = useState<any[]>([])
+  const [servers, setServers] = useState<any[]>([])
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    api.get('/api/auth/users').then((u) => setUsers(u.filter((x: any) => x.is_active || x.id === project.owner_id))).catch(() => {})
+    api.get('/api/agents/servers').then(setServers).catch(() => {})
+  }, [])
+
+  async function save(changes: any) {
+    setError('')
+    try {
+      await api.patch(`/api/projects/${project.id}`, changes)
+      onSaved()
+    } catch (e: any) {
+      setError(e.message)
+    }
+  }
+
+  const field = (key: keyof typeof form, label: string, placeholder = '') => (
+    <div>
+      <label className="label">{label}</label>
+      <input className="input" placeholder={placeholder} value={form[key]} onChange={(e) => setForm({ ...form, [key]: e.target.value })} />
+    </div>
+  )
+
+  return (
+    <Card title="Edit project">
+      <form
+        onSubmit={(e) => {
+          e.preventDefault()
+          save(form)
+        }}
+        className="grid gap-4 sm:grid-cols-2"
+      >
+        {field('name', 'Project name')}
+        {field('team_name', 'Team')}
+        {field('github_repo', 'GitHub repository (org/repo)', 'vnrvjiet-incubator/team-alpha')}
+        {field('default_branch', 'Default branch', 'main')}
+        {field('domain', 'Domain', 'team-alpha.apps.vnrvjiet.in')}
+        {field('health_path', 'Health check path', '/health')}
+        <div>
+          <label className="label">Owner (student)</label>
+          <UserSelect users={users} value={form.owner_id} onChange={(owner_id) => setForm({ ...form, owner_id })} />
+        </div>
+        <div>
+          <label className="label">Mentor</label>
+          <UserSelect users={users.filter((u) => u.role !== 'student')} value={form.mentor_id} onChange={(mentor_id) => setForm({ ...form, mentor_id })} />
+        </div>
+        <div>
+          <label className="label">Deployment server</label>
+          <select className="input" value={form.server_id} onChange={(e) => setForm({ ...form, server_id: e.target.value })}>
+            <option value="">Assign on first deploy</option>
+            {servers.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        {error && (
+          <div className="sm:col-span-2">
+            <ErrorBox error={error} />
+          </div>
+        )}
+        <div className="flex flex-wrap gap-2 sm:col-span-2">
+          <button className="btn-primary">Save changes</button>
+          <button type="button" className="btn-ghost" onClick={onCancel}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className={project.archived ? 'btn-ghost ml-auto' : 'btn-danger ml-auto'}
+            onClick={() => {
+              if (project.archived || confirm(`Archive ${project.name}? It will be hidden from the project list but its history is kept.`))
+                save({ archived: !project.archived })
+            }}
+          >
+            {project.archived ? 'Restore project' : 'Archive project'}
+          </button>
+        </div>
+      </form>
+    </Card>
+  )
 }
 
 export default function ProjectDetail() {
@@ -19,6 +118,8 @@ export default function ProjectDetail() {
   const [analyzing, setAnalyzing] = useState(false)
   const [tab, setTab] = useState<'findings' | 'plan' | 'artifacts' | 'detected'>('findings')
   const [openArtifact, setOpenArtifact] = useState<string>('')
+  const [editing, setEditing] = useState(false)
+  const canManage = auth.can('admin', 'devops')
 
   async function load() {
     try {
@@ -63,25 +164,54 @@ export default function ProjectDetail() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-lg font-semibold">{p.name}</h1>
+          <h1 className="flex items-center gap-2 text-lg font-semibold">
+            {p.name}
+            {p.archived && <span className="pill bg-slate-500/15 text-slate-400">archived</span>}
+          </h1>
           <p className="font-mono text-xs text-slate-500">
             {p.slug}
             {p.github_repo && ` · ${p.github_repo}`}
             {p.domain && ` · ${p.domain}`}
           </p>
         </div>
-        <button className="btn-primary" onClick={runAnalysis} disabled={analyzing || !p.github_repo}>
-          {analyzing ? 'Analyzing repository…' : 'Run readiness analysis'}
-        </button>
+        <div className="flex gap-2">
+          {canManage && (
+            <button className="btn-ghost" onClick={() => setEditing((v) => !v)}>
+              {editing ? 'Close' : 'Edit project'}
+            </button>
+          )}
+          <button
+            className="btn-primary"
+            onClick={runAnalysis}
+            disabled={analyzing || !p.github_repo}
+            title={p.github_repo ? '' : 'Set a GitHub repository on this project first'}
+          >
+            {analyzing ? 'Analyzing repository…' : 'Run readiness analysis'}
+          </button>
+        </div>
       </div>
+
+      {editing && (
+        <EditProject
+          project={p}
+          onCancel={() => setEditing(false)}
+          onSaved={() => {
+            setEditing(false)
+            load()
+          }}
+        />
+      )}
 
       {error && <ErrorBox error={error} />}
 
       {!analysis ? (
         <Card title="Deployment readiness">
           <Empty>
-            No analysis yet. Run one to clone the repository, detect the stack, scan for exposed secrets and
-            generate a deployment plan.
+            {p.github_repo
+              ? 'No analysis yet. Run one to clone the repository, detect the stack, scan for exposed secrets and generate a deployment plan.'
+              : canManage
+                ? 'This project has no GitHub repository yet. Click "Edit project" to add one, then run an analysis.'
+                : 'This project has no GitHub repository yet. Ask your DevOps admin to link it.'}
           </Empty>
         </Card>
       ) : (

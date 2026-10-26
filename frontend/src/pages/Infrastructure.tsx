@@ -13,7 +13,12 @@ export default function Infrastructure() {
   const [enrolling, setEnrolling] = useState(false)
   const [newServer, setNewServer] = useState({ name: '', hostname: '', port_range_start: 3000, port_range_end: 3999 })
   const [token, setToken] = useState('')
-  const [nginxForm, setNginxForm] = useState({ project_id: '', domain: '', upstream_port: '' })
+  const [nginxForm, setNginxFormRaw] = useState({ project_id: '', domain: '', upstream_port: '' })
+  // Any edit invalidates the preview, so "Create & apply" never ships a config nobody looked at.
+  const setNginxForm = (f: typeof nginxForm) => {
+    setNginxFormRaw(f)
+    setPreview('')
+  }
   const [preview, setPreview] = useState('')
   const [editingServer, setEditingServer] = useState<any>(null)
   const [editForm, setEditForm] = useState({ name: '', hostname: '', port_range_start: 3000, port_range_end: 3999 })
@@ -32,14 +37,19 @@ export default function Infrastructure() {
 
   async function load() {
     try {
-      const s = await api.get('/api/agents/servers')
+      const [s, c, h, p] = await Promise.all([
+        api.get('/api/agents/servers'),
+        api.get('/api/infra/nginx'),
+        api.get('/api/agents/commands/history?limit=15'),
+        api.get('/api/projects'),
+      ])
       setServers(s)
-      const first = selected || s[0]?.id || ''
+      setConfigs(c)
+      setCommands(h)
+      setProjects(p)
+      const first = s.find((x: any) => x.id === selected)?.id || s[0]?.id || ''
       setSelected(first)
       if (first) setUsage(await api.get(`/api/infra/ports/${first}`))
-      setConfigs(await api.get('/api/infra/nginx'))
-      setCommands(await api.get('/api/agents/commands/history?limit=15'))
-      setProjects(await api.get('/api/projects'))
     } catch (e: any) {
       setError(e.message)
     }
@@ -92,7 +102,7 @@ export default function Infrastructure() {
         options: {},
       })
       await api.post(`/api/infra/nginx/${cfg.id}/apply`)
-      setPreview('')
+      setNginxForm({ project_id: '', domain: '', upstream_port: '' })
       load()
     } catch (e: any) {
       setError(e.message)
@@ -158,14 +168,17 @@ export default function Infrastructure() {
       <div className="grid gap-6 lg:grid-cols-3">
         <Card title="Servers">
           {servers.length === 0 ? (
-            <Empty>No servers enrolled.</Empty>
+            <Empty>No servers enrolled. Click "Enroll server" to add the machine that runs student deployments.</Empty>
           ) : (
             <ul className="space-y-2">
               {servers.map((s) => (
                 <li key={s.id}>
-                  <button
+                  <div
+                    role="button"
+                    tabIndex={0}
                     onClick={() => setSelected(s.id)}
-                    className={`w-full rounded-md border p-2 text-left text-sm ${
+                    onKeyDown={(e) => e.key === 'Enter' && setSelected(s.id)}
+                    className={`w-full cursor-pointer rounded-md border p-2 text-left text-sm ${
                       selected === s.id ? 'border-sky-600/50 bg-ink-700' : 'border-ink-600 hover:bg-ink-700/50'
                     }`}
                   >
@@ -193,7 +206,7 @@ export default function Infrastructure() {
                         Edit
                       </button>
                     </div>
-                  </button>
+                  </div>
                 </li>
               ))}
             </ul>
@@ -203,41 +216,42 @@ export default function Infrastructure() {
         {editingServer && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
             <div className="w-full max-w-md rounded-xl border border-ink-600 bg-ink-800 p-6 shadow-2xl">
-              <h3 className="text-lg font-medium text-slate-200">Edit Server</h3>
+              <h3 className="text-lg font-medium text-slate-200">Edit server</h3>
               <form onSubmit={saveEdit} className="mt-4 space-y-4">
+                {error && <ErrorBox error={error} />}
                 <div>
-                  <label className="block text-xs font-medium text-slate-400">Name</label>
+                  <label className="label">Name</label>
                   <input
-                    className="input-text w-full mt-1"
+                    className="input"
                     value={editForm.name}
                     onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
                     required
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-slate-400">Hostname</label>
+                  <label className="label">Hostname</label>
                   <input
-                    className="input-text w-full mt-1"
+                    className="input"
                     value={editForm.hostname}
                     onChange={(e) => setEditForm({ ...editForm, hostname: e.target.value })}
                   />
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-xs font-medium text-slate-400">Port range start</label>
+                    <label className="label">Port range start</label>
                     <input
                       type="number"
-                      className="input-text w-full mt-1"
+                      className="input"
                       value={editForm.port_range_start}
                       onChange={(e) => setEditForm({ ...editForm, port_range_start: parseInt(e.target.value) })}
                       required
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-slate-400">Port range end</label>
+                    <label className="label">Port range end</label>
                     <input
                       type="number"
-                      className="input-text w-full mt-1"
+                      className="input"
                       value={editForm.port_range_end}
                       onChange={(e) => setEditForm({ ...editForm, port_range_end: parseInt(e.target.value) })}
                       required
@@ -245,11 +259,11 @@ export default function Infrastructure() {
                   </div>
                 </div>
                 <div className="mt-6 flex justify-end gap-3">
-                  <button type="button" onClick={() => setEditingServer(null)} className="btn-secondary">
+                  <button type="button" onClick={() => setEditingServer(null)} className="btn-ghost">
                     Cancel
                   </button>
                   <button type="submit" className="btn-primary">
-                    Save Changes
+                    Save changes
                   </button>
                 </div>
               </form>
@@ -257,8 +271,10 @@ export default function Infrastructure() {
           </div>
         )}
 
-        <Card title="Port registry" className="lg:col-span-2">
-          {!usage ? (
+        <Card title={usage ? `Port registry · ${usage.server}` : 'Port registry'} className="lg:col-span-2">
+          {servers.length === 0 ? (
+            <Empty>Enroll a server to start allocating ports for deployments.</Empty>
+          ) : !usage ? (
             <Spinner />
           ) : (
             <>
@@ -317,7 +333,14 @@ export default function Infrastructure() {
         <div className="grid gap-4 sm:grid-cols-4">
           <div className="sm:col-span-2">
             <label className="label">Project</label>
-            <select className="input" value={nginxForm.project_id} onChange={(e) => setNginxForm({ ...nginxForm, project_id: e.target.value })}>
+            <select
+              className="input"
+              value={nginxForm.project_id}
+              onChange={(e) => {
+                const proj = projects.find((p) => p.id === e.target.value)
+                setNginxForm({ ...nginxForm, project_id: e.target.value, domain: nginxForm.domain || proj?.domain || '' })
+              }}
+            >
               <option value="">Select…</option>
               {projects.map((p) => (
                 <option key={p.id} value={p.id}>
@@ -328,7 +351,7 @@ export default function Infrastructure() {
           </div>
           <div>
             <label className="label">Domain</label>
-            <input className="input" value={nginxForm.domain} onChange={(e) => setNginxForm({ ...nginxForm, domain: e.target.value })} />
+            <input className="input" placeholder="team.apps.vnrvjiet.in" value={nginxForm.domain} onChange={(e) => setNginxForm({ ...nginxForm, domain: e.target.value })} />
           </div>
           <div>
             <label className="label">Upstream port</label>

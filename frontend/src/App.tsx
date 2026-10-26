@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { api, auth } from './lib/api'
+import Account from './pages/Account'
 import Dashboard from './pages/Dashboard'
 import Dataset from './pages/Dataset'
 import IncidentDetail from './pages/IncidentDetail'
@@ -10,6 +11,7 @@ import Login from './pages/Login'
 import ProjectDetail from './pages/ProjectDetail'
 import Projects from './pages/Projects'
 import RiskBoard from './pages/RiskBoard'
+import Users from './pages/Users'
 
 const NAV = [
   { to: '/', label: 'Overview', end: true },
@@ -18,14 +20,17 @@ const NAV = [
   { to: '/infrastructure', label: 'Infrastructure', roles: ['admin', 'devops'] },
   { to: '/risk', label: 'Mentor board', roles: ['admin', 'devops', 'mentor'] },
   { to: '/dataset', label: 'Dataset', roles: ['admin', 'devops'] },
+  { to: '/users', label: 'Users', roles: ['admin'] },
 ]
 
 function SystemBanner() {
   const [status, setStatus] = useState<any>(null)
+  // Only operators can do anything about the model backend being down.
+  const canAct = auth.can('admin', 'devops')
   useEffect(() => {
-    api.get('/api/system/status').then(setStatus).catch(() => {})
+    if (canAct) api.get('/api/system/status').then(setStatus).catch(() => {})
   }, [])
-  if (!status?.degraded_mode) return null
+  if (!canAct || !status?.degraded_mode) return null
   return (
     <div className="border-b border-amber-500/30 bg-amber-500/10 px-6 py-2 text-xs text-amber-200">
       <strong>Degraded mode:</strong> the language model backend is unreachable. {status.degraded_note}
@@ -63,10 +68,10 @@ function Shell({ children }: { children: React.ReactNode }) {
             ))}
           </nav>
           <div className="flex items-center gap-3 text-xs">
-            <div className="text-right">
+            <Link to="/account" className="text-right hover:opacity-80" title="Your account">
               <div className="text-slate-300">{user?.name || user?.email}</div>
               <div className="text-slate-500">{user?.role}</div>
-            </div>
+            </Link>
             <button
               className="btn-ghost"
               onClick={() => {
@@ -104,6 +109,8 @@ export default function App() {
       <Route path="/infrastructure" element={<Protected><Infrastructure /></Protected>} />
       <Route path="/risk" element={<Protected><RiskBoard /></Protected>} />
       <Route path="/dataset" element={<Protected><Dataset /></Protected>} />
+      <Route path="/users" element={<Protected><Users /></Protected>} />
+      <Route path="/account" element={<Protected><Account /></Protected>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )

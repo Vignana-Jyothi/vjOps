@@ -355,3 +355,82 @@ def test_nginx_preview_and_domain_conflict_via_api(client, admin_headers, projec
         json={"project_id": project["id"], "domain": f"{slug}.apps.vnrvjiet.in", "upstream_port": 3105, "options": {}},
     )
     assert created.status_code == 201, created.text
+
+
+def _signup(client, email, password="student-password-1"):
+    r = client.post("/api/auth/signup", json={"email": email, "password": password})
+    assert r.status_code == 201, r.text
+    return r.json(), {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+
+def test_users_can_change_their_own_password(client, slug):
+    email = f"{slug}-pw@vnrvjiet.in"
+    _, headers = _signup(client, email)
+
+    wrong = client.post("/api/auth/change-password", headers=headers, json={"current_password": "nope", "new_password": "brand-new-pass-1"})
+    assert wrong.status_code == 400
+
+    ok = client.post("/api/auth/change-password", headers=headers, json={"current_password": "student-password-1", "new_password": "brand-new-pass-1"})
+    assert ok.status_code == 204
+    assert client.post("/api/auth/login", data={"username": email, "password": "student-password-1"}).status_code == 401
+    assert client.post("/api/auth/login", data={"username": email, "password": "brand-new-pass-1"}).status_code == 200
+
+
+def test_admin_manages_users_but_cannot_lock_themselves_out(client, admin_headers, slug):
+    email = f"{slug}-managed@vnrvjiet.in"
+    _, headers = _signup(client, email)
+    user_id = client.get("/api/auth/me", headers=headers).json()["id"]
+
+    promoted = client.patch(f"/api/auth/users/{user_id}", headers=admin_headers, json={"role": "mentor"})
+    assert promoted.status_code == 200 and promoted.json()["role"] == "mentor"
+    # Students can't manage users.
+    assert client.patch(f"/api/auth/users/{user_id}", headers=headers, json={"role": "admin"}).status_code == 403
+
+    reset = client.patch(f"/api/auth/users/{user_id}", headers=admin_headers, json={"password": "reset-by-admin-1"})
+    assert reset.status_code == 200
+    assert client.post("/api/auth/login", data={"username": email, "password": "reset-by-admin-1"}).status_code == 200
+
+    client.patch(f"/api/auth/users/{user_id}", headers=admin_headers, json={"is_active": False})
+    assert client.get("/api/auth/me", headers=headers).status_code == 401, "deactivation must take effect immediately"
+
+    me = client.get("/api/auth/me", headers=admin_headers).json()
+    assert client.patch(f"/api/auth/users/{me['id']}", headers=admin_headers, json={"role": "student"}).status_code == 400
+    assert client.patch(f"/api/auth/users/{me['id']}", headers=admin_headers, json={"is_active": False}).status_code == 400
+
+
+def test_assigning_an_owner_makes_the_project_visible_to_that_student(client, admin_headers, project, slug):
+    _, headers = _signup(client, f"{slug}-owner@vnrvjiet.in")
+    student_id = client.get("/api/auth/me", headers=headers).json()["id"]
+    assert client.get("/api/projects", headers=headers).json() == []
+
+    r = client.patch(f"/api/projects/{project['id']}", headers=admin_headers, json={"owner_id": student_id})
+    assert r.status_code == 200 and r.json()["owner_id"] == student_id
+    assert [p["id"] for p in client.get("/api/projects", headers=headers).json()] == [project["id"]]
+
+    # "" clears the owner; an unknown id is a clear 400, not a database error.
+    assert client.patch(f"/api/projects/{project['id']}", headers=admin_headers, json={"owner_id": ""}).json()["owner_id"] is None
+    assert client.patch(f"/api/projects/{project['id']}", headers=admin_headers, json={"owner_id": "missing"}).status_code == 400
+
+
+def test_a_student_dashboard_only_counts_their_own_projects(client, admin_headers, project, slug):
+    _, headers = _signup(client, f"{slug}-dash@vnrvjiet.in")
+    empty = client.get("/api/observability/dashboard", headers=headers).json()
+    assert empty["projects"] == 0
+    assert empty["servers"]["names"] == [], "students should not see the server inventory"
+
+    student_id = client.get("/api/auth/me", headers=headers).json()["id"]
+    client.patch(f"/api/projects/{project['id']}", headers=admin_headers, json={"owner_id": student_id})
+    assert client.get("/api/observability/dashboard", headers=headers).json()["projects"] == 1
+    admin_view = client.get("/api/observability/dashboard", headers=admin_headers)
+    assert admin_view.status_code == 200, admin_view.text
+    assert admin_view.json()["projects"] >= 1
+
+
+def test_inverted_port_ranges_are_rejected(client, admin_headers, enrolled_server, slug):
+    r = client.post("/api/agents/servers", headers=admin_headers, json={"name": f"bad-{slug}", "port_range_start": 4000, "port_range_end": 3000})
+    assert r.status_code == 400
+    r = client.patch(f"/api/agents/servers/{enrolled_server['id']}", headers=admin_headers, json={"port_range_end": 10})
+    assert r.status_code == 400
+    # The rejected edit must not have been half-applied.
+    server = next(s for s in client.get("/api/agents/servers", headers=admin_headers).json() if s["id"] == enrolled_server["id"])
+    assert server["port_range_end"] == 3120
