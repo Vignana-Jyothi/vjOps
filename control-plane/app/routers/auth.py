@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..deps import audit, current_user, require_roles
 from ..models import Role, User
-from ..schemas import Token, UserCreate, UserOut
+from ..schemas import SignupRequest, Token, UserCreate, UserOut
 from ..security import create_access_token, hash_password, verify_password
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -19,6 +19,29 @@ def login(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get
     if not user or not verify_password(form.password, user.hashed_password) or not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Incorrect email or password")
     audit(db, "auth.login", actor=user.email, actor_role=user.role)
+    return Token(
+        access_token=create_access_token(user.id, user.role),
+        role=user.role,
+        name=user.name,
+        email=user.email,
+    )
+
+
+@router.post("/signup", response_model=Token, status_code=201)
+def signup(payload: SignupRequest, db: Session = Depends(get_db)):
+    # Self-service accounts are always students; elevated roles are granted by an admin via /users.
+    email = payload.email.lower().strip()
+    if db.query(User).filter(User.email == email).first():
+        raise HTTPException(status.HTTP_409_CONFLICT, "A user with that email already exists")
+    user = User(
+        email=email,
+        name=payload.name.strip() or email.split("@")[0],
+        role=Role.student.value,
+        hashed_password=hash_password(payload.password),
+    )
+    db.add(user)
+    db.commit()
+    audit(db, "auth.signup", actor=user.email, actor_role=user.role, target_type="user", target_id=user.id)
     return Token(
         access_token=create_access_token(user.id, user.role),
         role=user.role,

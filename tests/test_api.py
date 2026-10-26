@@ -328,6 +328,17 @@ def test_students_only_see_their_own_projects(client, admin_headers, project, sl
     assert client.get("/api/observability/risk", headers=student).status_code == 403
 
 
+def test_signup_creates_a_student_and_rejects_duplicates(client, slug):
+    body = {"email": f"{slug}-new@vnrvjiet.in", "password": "signup-password-1", "name": "New Student"}
+    r = client.post("/api/auth/signup", json={**body, "role": "admin"})
+    assert r.status_code == 201
+    assert r.json()["role"] == "student", "self-signup must never grant elevated roles"
+
+    me = client.get("/api/auth/me", headers={"Authorization": f"Bearer {r.json()['access_token']}"}).json()
+    assert me["email"] == body["email"]
+    assert client.post("/api/auth/signup", json=body).status_code == 409
+
+
 def test_nginx_preview_and_domain_conflict_via_api(client, admin_headers, project, enrolled_server, slug):
     preview = client.post(
         "/api/infra/nginx/preview",

@@ -22,6 +22,12 @@ class UserCreate(BaseModel):
     role: Literal["admin", "devops", "mentor", "student"] = "student"
 
 
+class SignupRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8)
+    name: str = ""
+
+
 class UserOut(BaseModel):
     id: str
     email: str

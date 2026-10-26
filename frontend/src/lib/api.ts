@@ -82,6 +82,15 @@ export const api = {
     auth.set(data.access_token, { email: data.email, name: data.name, role: data.role })
     return data
   },
+
+  async signup(name: string, email: string, password: string) {
+    const data = await request<any>('/api/auth/signup', {
+      method: 'POST',
+      body: JSON.stringify({ name, email, password }),
+    })
+    auth.set(data.access_token, { email: data.email, name: data.name, role: data.role })
+    return data
+  },
 }
 
 // ---------------------------------------------------------------- helpers
